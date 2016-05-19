@@ -1,12 +1,19 @@
 #include "XControl.h"
 
-XControl* lc;
+/*
 
-// switch states
-#define ON 1
-#define JUSTON 3
-#define JUSTOFF 4
-#define OFF 0
+  80
+0    0
+2    8
+  20
+1    4
+0    4
+  01    04
+  
+ */
+
+
+XControl* lc;
 
 // teensy pins
 #define TEENSY_DIN 2
@@ -39,11 +46,20 @@ XControl* lc;
 #define LED_H20 6
 #define LED_H04 7
 
+// switch state
+#define SS_OFF      0
+#define SS_JUSTOFF  1
+#define SS_JUSTON   2
+#define SS_ON       3
+
+#define SWITCHISON(x) ((switchStates[x]&2)==2)
+
 byte debouncedSwitches[10];
+byte switchStates[10];
 
 // indices into debounced switch array
-#define SW_MODE 8
-#define SW_ACT 9
+#define SN_MODE 8
+#define SN_ACT 9
 
 // teensy pin mapping to debounced switch array entry
 int switchPinMap[10] =
@@ -91,6 +107,8 @@ void setup()
 {
   Serial.begin(19200);
 
+  pinMode(5,OUTPUT); // test pin
+  
   pinMode(13,OUTPUT);
 
   for (int i = 14; i < 24; ++i)
@@ -100,31 +118,29 @@ void setup()
 
   lc = new XControl(TEENSY_DIN,TEENSY_CLK,TEENSY_LOAD);
 
-  // initialise debouncing to reflect ON or OFF
+  // initialise debouncing/states to reflect ON or OFF
   for (int i = 0; i < 10; ++i)
   {
     debouncedSwitches[i] = digitalRead(switchPinMap[i]) ? 0xff : 0;
+    switchStates[i] = debouncedSwitches[i] & SS_ON;
   }
 }
-
 
 void updateSwitches(void)
 {
+  byte v, before, after;
+  
   for (int i = 0; i < 10; ++i)
   {
-    debouncedSwitches[i] <<= 1;
-    debouncedSwitches[i] |= digitalRead(switchPinMap[i]);
+    v = debouncedSwitches[i];
+    v <<= 1;
+    v |= digitalRead(switchPinMap[i]);
+    debouncedSwitches[i] = v;
+
+    before = (v & 0b11100000) == 0b11100000;
+    after  = (v & 0b00000111) == 0b00000111;
+    switchStates[i] = before + (after << 1);
   }
-}
-
-int switchStates[] = {OFF, JUSTOFF, JUSTON, ON};
-
-int switchState(int switchID)
-{
-  byte before = (debouncedSwitches[switchID] & 0b11100000) == 0b11100000;
-  byte after  = ((debouncedSwitches[switchID] & 0b00000111) == 0b00000111) << 1;
-
-  return switchStates[before + after];
 }
 
 int collectBinary(void)
@@ -133,7 +149,7 @@ int collectBinary(void)
   for (int i = 0; i < 8; ++i)
   {
     n <<= 1;
-    n |= switchState(i) & 1;
+    n |= SWITCHISON(i);
   }
   return n;
 }
@@ -240,18 +256,71 @@ void flashYes(void)
 }
 
 
-void loop()
-{
-  // should be called every 5-10ms
-  updateSwitches();
 
+typedef int(*WFN)(void);
+WFN modes[] =
+{
+  beginPlay,
+  beginGame,
+  play1
+};
+
+//
+
+int beginGame(void)
+{
+  int binary = collectBinary();
+  outputBinary(binary);
+  outputDecimal(123);
+  outputToModule(0x10, 0x20);
+  outputToModule(0x08, 0x20);
+  return 1;
+}
+
+//
+
+int beginPlay(void)
+{
+  return 2;  
+}
+
+int play1(void)
+{
   int binary = collectBinary();
   outputBinary(binary);
   outputDecimal(binary);  
   outputHex(binary);
+  return 2;
+}
 
-  lightAction(switchState(SW_ACT));
-  lightMode(switchState(SW_MODE));
+int loopCount = 0;
+int mode = 0;
+WFN fn = modes[0];
+
+void loop()
+{
+  loopCount = (loopCount + 1) & 31;
+  if (loopCount == 0)
+  {
+    // about 7.5ms update rate
+    digitalWrite(5, !digitalRead(5));
+    updateSwitches();
+
+    // switch mode when mode switch makes a positive edge transition
+    if (switchStates[SN_MODE] == SS_JUSTON)
+    {
+      ++mode;
+      mode &= 1;
+  
+      fn = modes[mode];
+  
+      lightAction(mode);
+    }
+  }
+
+  fn = modes[fn()];
+
+  lightMode(SWITCHISON(SN_MODE));
 
   lc->updateDisplay(data);
 }
