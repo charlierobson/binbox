@@ -7,7 +7,7 @@
 2    8
   20
 1    4
-0    4
+0    0
   01    04
   
  */
@@ -102,11 +102,14 @@ unsigned char yes[3] =
 byte cache[8];
 byte data[8] = { 0x4, 0x4, 0x4, 0x4, 0x4, 0x4, 0x4, 0x04 };
 
+int gt;
 
 void setup()
 {
   Serial.begin(19200);
 
+  randomSeed(analogRead(0));
+  
   pinMode(5,OUTPUT); // test pin
   
   pinMode(13,OUTPUT);
@@ -261,19 +264,96 @@ typedef int(*WFN)(void);
 WFN modes[] =
 {
   beginPlay,
-  beginGame,
-  play1
+  beginGame1,
+
+  play1,
+
+  0,
+  game1_loop,
+  game1_no,
+  game1_yes
 };
 
 //
+byte randy;
 
-int beginGame(void)
+int beginGame1(void)
 {
   int binary = collectBinary();
   outputBinary(binary);
-  outputDecimal(123);
+  
+  randy = random(256);
+
+  outputDecimal(randy);
+
   outputToModule(0x10, 0x20);
   outputToModule(0x08, 0x20);
+  return 4;
+}
+
+int game1_loop()
+{
+  int binary = collectBinary();
+  outputBinary(binary);
+
+  if (switchStates[SN_ACT] == SS_JUSTON)
+  {
+    gt = 0;
+    if (binary == randy)
+    {
+      return 6;
+    }
+    return 5;
+  }
+  return 4;
+}
+
+int game1_no()
+{
+  outputToModule(0x80, 0);
+  outputToModule(0x40, 0);
+  outputToModule(0x20, 0);
+
+  if ((gt & 128) == 0)
+  {
+    outputToModule(0x10, 0x70);
+    outputToModule(0x08, 0x71);
+  }
+  else
+  {
+    outputToModule(0x10, 0);
+    outputToModule(0x08, 0);
+  }
+
+  if (gt < 3000) return 5;
+
+  outputDecimal(randy);
+
+  outputToModule(0x10, 0x20);
+  outputToModule(0x08, 0x20);
+
+  return 4;
+}
+
+int game1_yes()
+{
+  outputToModule(0x10, 0);
+  outputToModule(0x08, 0);
+
+  if ((gt & 256) == 0)
+  {
+    outputToModule(0x80, yes[0]);
+    outputToModule(0x40, yes[1]);
+    outputToModule(0x20, yes[2]);
+  }
+  else
+  {
+    outputToModule(0x80, 0);
+    outputToModule(0x40, 0);
+    outputToModule(0x20, 0);
+  }
+
+  if (gt < 4000) return 6;
   return 1;
 }
 
@@ -293,8 +373,9 @@ int play1(void)
   return 2;
 }
 
-int loopCount = 0;
-int mode = 0;
+int mode = 0;       // play mode. 1 = game
+int loopCount = 31; // we want the buttons to be read on the first iteration
+
 WFN fn = modes[0];
 
 void loop()
@@ -302,6 +383,9 @@ void loop()
   loopCount = (loopCount + 1) & 31;
   if (loopCount == 0)
   {
+    // shonky game timer, counts in milliseconds, _very_ roughly
+    gt += 7;
+    
     // about 7.5ms update rate
     digitalWrite(5, !digitalRead(5));
     updateSwitches();
@@ -313,14 +397,12 @@ void loop()
       mode &= 1;
   
       fn = modes[mode];
-  
-      lightAction(mode);
+      
+      lightMode(SWITCHISON(SN_MODE));
     }
   }
 
   fn = modes[fn()];
-
-  lightMode(SWITCHISON(SN_MODE));
 
   lc->updateDisplay(data);
 }
