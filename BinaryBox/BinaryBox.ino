@@ -1,5 +1,8 @@
 #include "XControl.h"
 
+#include "game1.h"
+#include "game2.h"
+
 /*
 
   80
@@ -71,7 +74,7 @@ int switchPinMap[10] =
 
 // 7-seg led bitmaps
 
-unsigned char characterBitmaps[16] = 
+byte characterBitmaps[16] = 
 {
   0b11011011,
   0b01001000,
@@ -92,7 +95,7 @@ unsigned char characterBitmaps[16] =
   0b10110010
 };
 
-unsigned char yes[3] = 
+byte yes[3] = 
 {
   0b01101010, 
   0b10110011,
@@ -146,7 +149,12 @@ void updateSwitches(void)
   }
 }
 
-int collectBinary(void)
+bool actFlipped(void)
+{
+  return switchStates[SN_ACT] == SS_JUSTON;
+}
+
+byte collectBinary(void)
 {
   int n = 0;
   for (int i = 0; i < 8; ++i)
@@ -157,7 +165,7 @@ int collectBinary(void)
   return n;
 }
 
-void outputBinary(int n)
+void outputBinary(byte n)
 {
   for (int i = 0; i < 8; ++i)
     data[i] &= 0b11111011;
@@ -172,7 +180,7 @@ void outputBinary(int n)
   if (n & 0x01) data[LED_H01] |= 4;
 }
 
-void outputToModule(int moduleMask, byte bitmap)
+void outputToModule(byte moduleMask, byte bitmap)
 {
   for (int i = 0; i < 8; ++i)
   {
@@ -183,13 +191,13 @@ void outputToModule(int moduleMask, byte bitmap)
   }
 }
 
-void outputDigit(int moduleMask, int digit)
+void outputDigit(byte moduleMask, byte digit)
 {
   unsigned char bitmap = characterBitmaps[digit];
   outputToModule(moduleMask, bitmap);
 }
 
-void outputDecimal(int n)
+void outputDecimal(byte n)
 {
   int hundreds = n / 100;
   n -= hundreds * 100;
@@ -202,13 +210,13 @@ void outputDecimal(int n)
   outputDigit(0x20, n);
 }
 
-void outputHex(int n)
+void outputHex(byte n)
 {
   outputDigit(0x10, n >> 4);
   outputDigit(0x08, n & 15);
 }
 
-void clearModule(int mask)
+void clearModule(byte mask)
 {
   for (int i = 0; i < 8; ++i)
   {
@@ -260,123 +268,37 @@ void flashYes(void)
 
 
 
-typedef int(*WFN)(void);
-WFN modes[] =
-{
-  beginPlay,
-  beginGame1,
-
-  play1,
-
-  0,
-  game1_loop,
-  game1_no,
-  game1_yes
-};
-
-//
-byte randy;
-
-int beginGame1(void)
-{
-  int binary = collectBinary();
-  outputBinary(binary);
-  
-  randy = random(256);
-
-  outputDecimal(randy);
-
-  outputToModule(0x10, 0x20);
-  outputToModule(0x08, 0x20);
-  return 4;
-}
-
-int game1_loop()
-{
-  int binary = collectBinary();
-  outputBinary(binary);
-
-  if (switchStates[SN_ACT] == SS_JUSTON)
-  {
-    gt = 0;
-    if (binary == randy)
-    {
-      return 6;
-    }
-    return 5;
-  }
-  return 4;
-}
-
-int game1_no()
-{
-  outputToModule(0x80, 0);
-  outputToModule(0x40, 0);
-  outputToModule(0x20, 0);
-
-  if ((gt & 128) == 0)
-  {
-    outputToModule(0x10, 0x70);
-    outputToModule(0x08, 0x71);
-  }
-  else
-  {
-    outputToModule(0x10, 0);
-    outputToModule(0x08, 0);
-  }
-
-  if (gt < 3000) return 5;
-
-  outputDecimal(randy);
-
-  outputToModule(0x10, 0x20);
-  outputToModule(0x08, 0x20);
-
-  return 4;
-}
-
-int game1_yes()
-{
-  outputToModule(0x10, 0);
-  outputToModule(0x08, 0);
-
-  if ((gt & 256) == 0)
-  {
-    outputToModule(0x80, yes[0]);
-    outputToModule(0x40, yes[1]);
-    outputToModule(0x20, yes[2]);
-  }
-  else
-  {
-    outputToModule(0x80, 0);
-    outputToModule(0x40, 0);
-    outputToModule(0x20, 0);
-  }
-
-  if (gt < 4000) return 6;
-  return 1;
-}
 
 //
 
-int beginPlay(void)
+void* play_begin(void)
 {
-  return 2;  
+  return (void*)play_loop;
 }
 
-int play1(void)
+void* play_loop(void)
 {
   int binary = collectBinary();
   outputBinary(binary);
   outputDecimal(binary);  
   outputHex(binary);
-  return 2;
+
+  return (void*)play_loop;
 }
+
+typedef void*(*WFN)(void);
+
+
+extern void* game1_begin(void);
+extern void* game2_begin(void);
 
 int mode = 0;       // play mode. 1 = game
 int loopCount = 31; // we want the buttons to be read on the first iteration
 
-WFN fn = modes[0];
+WFN modes[3] = { play_begin, game1_begin, game2_begin };
+WFN fn = (WFN)modes[0];
+
+byte randy;
 
 void loop()
 {
@@ -394,15 +316,13 @@ void loop()
     if (switchStates[SN_MODE] == SS_JUSTON)
     {
       ++mode;
-      mode &= 1;
+      mode %= sizeof(modes);
   
       fn = modes[mode];
-      
-      lightMode(SWITCHISON(SN_MODE));
     }
   }
 
-  fn = modes[fn()];
+  fn = (WFN)fn();
 
   lc->updateDisplay(data);
 }
